@@ -1,0 +1,96 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.9;
+
+import "./interface/IERC20.sol";
+import "./lib/SafeMath.sol";
+import "./contracts/Ownable.sol";
+import "./interface/IUniswapV2Pair.sol"; 
+import "./lib/SafeERC20.sol";
+import "./contracts/Coin.sol";
+import "./contracts/Telepad.sol";
+
+contract Factory is Ownable{
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    address[] allTelepad;
+    address payable public devWallet;
+    uint256 public feeAmount = 0.01 ether;
+    address public dexRouter = 0x10ED43C718714eb63d5aA57B78B54704E256024E; // Pancakeswap V2 Router;
+    uint8 public mainFee = 1;  // default trade fee is 1%
+    mapping(address => address[]) telepadLists;
+    uint256 public virtualTokenLp = 1073 * (10 ** 24);  // 1073 * (10 ** 6) amounts
+    uint256 public virtualEthLp = 6.2 ether;
+    uint256 public marketCap = 60000 * (10 ** 18);
+    mapping(address => address[]) public userContributors;
+    mapping(address => bool) public telepadAddresses;
+    constructor() {
+        devWallet = payable(msg.sender);
+    }
+    receive() external payable {
+    }
+    
+    function createTelepad(
+                string [] memory tokenDatas, //name, symbol, description, website, twitter, telegram, discord
+                uint8 maxBuyAmount
+                ) external payable returns (address) {
+        require(msg.value >= feeAmount);
+        devWallet.transfer(feeAmount);
+
+        Coin coin = new Coin(address(this), tokenDatas, 1000000000, 18);
+        address coinAddr = address(coin);
+
+        uint256 tokenBalance = IERC20(coin).balanceOf(address(this));
+
+        uint256 newEthLp = virtualEthLp.add(msg.value.sub(feeAmount));
+        uint256 newTokenLp = virtualEthLp.mul(virtualTokenLp).div(newEthLp);
+        uint256 tokenAmount = virtualTokenLp.sub(newTokenLp);
+
+        uint256 k = virtualEthLp.mul(virtualTokenLp);
+
+        require(maxBuyAmount == 5 || maxBuyAmount == 10);
+        require(tokenAmount <= tokenBalance.mul(maxBuyAmount).div(100));
+        uint256 [5] memory otherDatas = [tokenAmount, msg.value.sub(feeAmount), virtualEthLp, virtualTokenLp, k];
+        address [3] memory addresses = [coinAddr, address(this), dexRouter];
+
+        Telepad telepad =  new Telepad(msg.sender, tokenDatas, maxBuyAmount, addresses, otherDatas);
+        address telepadAddr = address(telepad);
+        payable(telepadAddr).transfer(msg.value.sub(feeAmount));
+
+        IERC20(coin).transfer(address(telepad), tokenBalance.sub(tokenAmount));
+        IERC20(coin).transfer(msg.sender, tokenAmount);
+        Ownable(coin).transferOwnership(telepadAddr);
+        allTelepad.push(telepadAddr);
+        telepadLists[msg.sender].push(telepadAddr);
+        telepadAddresses[telepadAddr] = true;
+        return telepadAddr;
+    }
+
+    function updateDatas(uint256 _newFee, uint8 _mainFee, uint256 _marketCap, address payable _newDev) external onlyOwner{
+        feeAmount = _newFee;
+        mainFee = _mainFee;
+        marketCap = _marketCap;
+        devWallet = _newDev;
+    }
+
+    function updateContributors(address _user, address _teleAgent) external {
+        require(telepadAddresses[msg.sender] == true);
+        userContributors[_user].push(_teleAgent);
+    }
+
+    function getAllAddresses() external view returns(address [] memory){
+        return((allTelepad));
+    }
+
+    function getUserContributorAddresses(address _user) external view returns(address [] memory){
+        return((userContributors[_user]));
+    }
+
+    function funUserLists(address _user) external view returns (address [] memory){
+        return (telepadLists[_user]);
+    }
+
+    function updateVirtualLiquidity(uint256 _ethLp, uint256 _tokenLp) external onlyOwner {
+        virtualEthLp = _ethLp;
+        virtualTokenLp = _tokenLp;
+    }
+}
